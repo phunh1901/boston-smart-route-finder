@@ -1,0 +1,50 @@
+# ==============================================================================
+# Git Ignore Configuration for Boston Smart Route Finder
+# ==============================================================================
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Runtime Cache & State Files (Generated dynamically)
+*.pkl
+cache/
+data/cache/
+last_route.json
+data/last_route.json
+*.log
+
+# Virtual Environments
+.env
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# IDEs and Text Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary and Scratch Files
+scratch/
+scratch*/
+scratch_replace.py
