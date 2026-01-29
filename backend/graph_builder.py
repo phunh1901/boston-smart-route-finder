@@ -125,3 +125,92 @@ def build_graph(nodes, edges) -> nx.MultiDiGraph:
     return G
 
 
+def build_dummy_graph() -> nx.MultiDiGraph:
+    """Creates a connected simulation graph between famous Boston landmarks."""
+    G = nx.MultiDiGraph()
+
+    locations = {
+        1:  ("Harvard University",         42.3744, -71.1169),
+        2:  ("MIT",                        42.3601, -71.0942),
+        3:  ("Boston Common",              42.3551, -71.0657),
+        4:  ("Logan Airport",              42.3656, -71.0096),
+        5:  ("Fenway Park",                42.3467, -71.0972),
+        6:  ("Boston City Hall",           42.3601, -71.0578),
+        7:  ("Quincy Market",              42.3599, -71.0544),
+        8:  ("Northeastern University",    42.3398, -71.0892),
+        9:  ("Boston Children's Hospital", 42.3378, -71.1069),
+        10: ("South Station",              42.3519, -71.0552),
+        11: ("Tufts Medical Center",       42.3497, -71.0638),
+        12: ("Museum of Fine Arts",        42.3394, -71.0942),
+        13: ("Cambridge St Intersection",  42.3700, -71.1050),
+        14: ("Broadway Crossing",          42.3650, -71.0950),
+        15: ("Charles River Bridge East",  42.3610, -71.0750),
+        16: ("Charles River Bridge West",  42.3590, -71.0850),
+        17: ("Commonwealth Ave Junc",      42.3490, -71.0850),
+        18: ("Downtown Crossing",          42.3550, -71.0600),
+    }
+
+    for nid, (name, lat, lon) in locations.items():
+        G.add_node(nid, x=lon, y=lat, name=name)
+
+    edges_to_add = [
+        (1, 13, "primary"), (13, 14, "primary"), (14, 2, "primary"),
+        (1, 16, "secondary"), (16, 2, "secondary"),
+        (2, 15, "primary"), (15, 3, "primary"), (15, 18, "primary"),
+        (16, 15, "secondary"),
+        (3, 18, "primary"), (18, 6, "primary"), (6, 7, "primary"),
+        (7, 4, "motorway"), (18, 4, "motorway"),
+        (2, 5, "primary"),
+        (5, 17, "secondary"), (17, 8, "primary"), (8, 12, "primary"),
+        (12, 9, "secondary"),
+        (9, 11, "secondary"),
+        (11, 10, "primary"), (10, 3, "primary"), (10, 18, "primary"),
+        (8, 11, "primary"),
+        (3, 17, "secondary"),
+        (4, 10, "motorway")
+    ]
+
+    for u, v, hw in edges_to_add:
+        ud = G.nodes[u]
+        vd = G.nodes[v]
+        dist = haversine_distance(ud["y"], ud["x"], vd["y"], vd["x"])
+        attrs = {"length": dist, "highway": hw, "oneway": False}
+        G.add_edge(u, v, **attrs)
+        G.add_edge(v, u, **attrs)
+
+    return G
+
+
+def build_and_save_graph(pbf_path: str = None, output_path: str = None) -> nx.MultiDiGraph:
+    """
+    Complete pipeline: Parse PBF → Build Graph → Save .pkl.
+    Gracefully falls back to simulation graph if PBF or pyrosm fails.
+    """
+    pbf = pbf_path or PBF_PATH
+    out = output_path or GRAPH_PATH
+
+    try:
+        nodes, edges = parse_osm_network(pbf)
+        G = build_graph(nodes, edges)
+        logger.info("Real-world graph successfully constructed from PBF.")
+    except Exception as e:
+        logger.warning(
+            "Could not parse PBF (%s). Falling back to Boston landmark simulation graph...",
+            str(e)
+        )
+        G = build_dummy_graph()
+
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "wb") as f:
+        pickle.dump(G, f, protocol=pickle.HIGHEST_PROTOCOL)
+    logger.info("Graph saved to: %s", out)
+    return G
+
+
+def load_graph(graph_path: str = None) -> nx.MultiDiGraph:
+    """Loads pre-built graph pickle file."""
+    path = graph_path or GRAPH_PATH
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
