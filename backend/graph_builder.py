@@ -214,3 +214,26 @@ def load_graph(graph_path: str = None) -> nx.MultiDiGraph:
         return pickle.load(f)
 
 
+def get_node_arrays(G: nx.MultiDiGraph) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Extracts numpy arrays (node_ids, lats, lons) for fast vectorized nearest node queries.
+    """
+    node_ids, lats, lons = [], [], []
+    for nid, data in G.nodes(data=True):
+        node_ids.append(nid)
+        lats.append(data["y"])
+        lons.append(data["x"])
+    return np.array(node_ids, dtype=np.int64), np.array(lats), np.array(lons)
+
+
+def find_nearest_node(lat: float, lon: float,
+                      node_ids: np.ndarray,
+                      lats: np.ndarray,
+                      lons: np.ndarray) -> int:
+    """Finds nearest node to given coordinate using vectorized Haversine calculation."""
+    dlat = np.radians(lats - lat)
+    dlon = np.radians(lons - lon)
+    a = (np.sin(dlat / 2) ** 2
+         + np.cos(np.radians(lat)) * np.cos(np.radians(lats)) * np.sin(dlon / 2) ** 2)
+    distances = 2 * 6_371_000.0 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+    return int(node_ids[np.argmin(distances)])
