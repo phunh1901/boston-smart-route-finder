@@ -177,3 +177,54 @@ def _reconstruct_path(prev: dict, target: int) -> List[int]:
     return path
 
 
+def path_to_coordinates(
+    G: nx.MultiDiGraph, path: List[int]
+) -> List[Tuple[float, float]]:
+    """
+    Transforms sequence of node IDs into high-resolution [(lat, lon), ...] coordinates.
+    Utilizes GIS LineString geometry if available, falling back to node endpoints.
+    """
+    coords = []
+    if not path:
+        return coords
+
+    # Start node coordinate
+    coords.append((G.nodes[path[0]]["y"], G.nodes[path[0]]["x"]))
+
+    for i in range(len(path) - 1):
+        u = path[i]
+        v = path[i + 1]
+        edge_data = G.get_edge_data(u, v)
+
+        best_geom = None
+        if edge_data is not None:
+            if "geometry" in edge_data:
+                best_geom = edge_data["geometry"]
+            elif isinstance(edge_data, dict):
+                min_len = float("inf")
+                for d in edge_data.values():
+                    if isinstance(d, dict):
+                        length = d.get("length", 1.0)
+                        if length < min_len:
+                            min_len = length
+                            best_geom = d.get("geometry", None)
+
+        if best_geom is not None:
+            try:
+                if hasattr(best_geom, "coords"):
+                    geom_coords = list(best_geom.coords)
+                elif isinstance(best_geom, list):
+                    geom_coords = best_geom
+                else:
+                    geom_coords = []
+
+                for pt in geom_coords:
+                    lat, lon = float(pt[1]), float(pt[0])
+                    if not coords or (lat, lon) != coords[-1]:
+                        coords.append((lat, lon))
+            except Exception:
+                coords.append((G.nodes[v]["y"], G.nodes[v]["x"]))
+        else:
+            coords.append((G.nodes[v]["y"], G.nodes[v]["x"]))
+
+    return coords
