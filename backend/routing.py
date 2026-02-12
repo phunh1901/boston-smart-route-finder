@@ -101,3 +101,79 @@ def dijkstra(
     return path, dist[target], exec_time
 
 
+def astar(
+    G: nx.MultiDiGraph,
+    source: int,
+    target: int,
+    blocked_edges: Set[Tuple[int, int]] = None
+) -> Tuple[Optional[List[int]], float, float]:
+    """
+    A* algorithm using Haversine admissible heuristic to guide search.
+    Skips edges present in blocked_edges.
+    Returns: (path_node_ids, total_distance_m, execution_time_s)
+    """
+    t0 = time.perf_counter()
+    if blocked_edges is None:
+        blocked_edges = set()
+
+    tgt_y = G.nodes[target]["y"]
+    tgt_x = G.nodes[target]["x"]
+
+    def h(node: int) -> float:
+        nd = G.nodes[node]
+        return _haversine(nd["y"], nd["x"], tgt_y, tgt_x)
+
+    g_score: Dict[int, float] = {source: 0.0}
+    prev: Dict[int, Optional[int]] = {source: None}
+    visited: Set[int] = set()
+    counter = 0
+    pq: List[Tuple[float, int, int]] = [(h(source), counter, source)]
+
+    while pq:
+        _, _, u = heapq.heappop(pq)
+
+        if u in visited:
+            continue
+        visited.add(u)
+
+        if u == target:
+            break
+
+        g_u = g_score[u]
+
+        for v in G.neighbors(u):
+            if v in visited:
+                continue
+
+            if (u, v) in blocked_edges or (v, u) in blocked_edges:
+                continue
+
+            w = _min_edge_length(G.get_edge_data(u, v))
+            tentative_g = g_u + w
+
+            if tentative_g < g_score.get(v, float("inf")):
+                g_score[v] = tentative_g
+                prev[v] = u
+                f_v = tentative_g + h(v)
+                counter += 1
+                heapq.heappush(pq, (f_v, counter, v))
+
+    exec_time = time.perf_counter() - t0
+
+    if target not in g_score:
+        return None, float("inf"), exec_time
+
+    path = _reconstruct_path(prev, target)
+    return path, g_score[target], exec_time
+
+
+def _reconstruct_path(prev: dict, target: int) -> List[int]:
+    path: List[int] = []
+    node: Optional[int] = target
+    while node is not None:
+        path.append(node)
+        node = prev.get(node)
+    path.reverse()
+    return path
+
+
