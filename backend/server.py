@@ -443,3 +443,154 @@ def graph_reload():
 
 
 @app.get("/api/graph/blocked", response_model=List[BlockedEdgeInfo], tags=["Graph"])
+def get_blocked_edges():
+    _require_graph()
+    G = GS.G
+    res = []
+    seen = set()
+
+    for u, v in list(GS.blocked_edges):
+        if (v, u) in seen:
+            continue
+        seen.add((u, v))
+
+        if u in G and v in G:
+            edge_data = G.get_edge_data(u, v) or G.get_edge_data(v, u)
+            _, highway, coords = extract_edge_attributes(edge_data, u, v, G)
+
+            res.append(BlockedEdgeInfo(
+                u=u, v=v,
+                u_lat=G.nodes[u]["y"], u_lon=G.nodes[u]["x"],
+                v_lat=G.nodes[v]["y"], v_lon=G.nodes[v]["x"],
+                name=f"Road ({highway})",
+                coords=coords
+            ))
+    return res
+
+
+@app.post("/api/graph/blocked", tags=["Graph"])
+def block_edge(body: BlockEdgeIn):
+    _require_graph()
+    u, v = body.u, body.v
+    if u not in GS.G or v not in GS.G:
+        raise HTTPException(404, f"Intersections ({u}, {v}) do not exist in graph.")
+
+    blocked_count = GS.add_blocked_edge(u, v)
+    return {
+        "success": True,
+        "message": f"Successfully blocked road segment connecting node {u} and {v}",
+        "blocked_count": blocked_count
+    }
+
+
+@app.delete("/api/graph/blocked", tags=["Graph"])
+def unblock_edge(u: int, v: int):
+    _require_graph()
+    removed = GS.remove_blocked_edge(u, v)
+    if removed:
+        return {"success": True, "message": f"Successfully unblocked road between {u} and {v}"}
+    return {"success": False, "message": f"Road between {u} and {v} was not blocked."}
+
+
+@app.post("/api/graph/blocked/clear", tags=["Graph"])
+def clear_blocked_edges():
+    GS.clear_all_blocked()
+    return {"success": True, "message": "Successfully cleared all road blocks."}
+
+
+@app.get("/api/graph/node-adjacent/{node_id}", tags=["Graph"])
+def get_node_adjacent(node_id: int):
+    _require_graph()
+    G = GS.G
+    if node_id not in G:
+        raise HTTPException(404, f"Intersection node {node_id} not found in map.")
+
+    adj_edges = []
+
+    # Outgoing edges
+    for v in G.neighbors(node_id):
+        edge_data = G.get_edge_data(node_id, v)
+        length_m, highway, coords = extract_edge_attributes(edge_data, node_id, v, G)
+
+        adj_edges.append({
+            "u": node_id,
+            "v": v,
+            "u_lat": G.nodes[node_id]["y"],
+            "u_lon": G.nodes[node_id]["x"],
+            "v_lat": G.nodes[v]["y"],
+            "v_lon": G.nodes[v]["x"],
+            "length_m": length_m,
+            "highway": highway,
+            "coords": coords,
+            "direction": "out",
+            "is_blocked": (node_id, v) in GS.blocked_edges or (v, node_id) in GS.blocked_edges
+        })
+
+    # Incoming edges (for directed components)
+    if hasattr(G, "predecessors"):
+        for u in G.predecessors(node_id):
+            if u in G.neighbors(node_id):
+                continue
+            edge_data = G.get_edge_data(u, node_id)
+            length_m, highway, coords = extract_edge_attributes(edge_data, u, node_id, G)
+
+            adj_edges.append({
+                "u": u,
+                "v": node_id,
+                "u_lat": G.nodes[u]["y"],
+                "u_lon": G.nodes[u]["x"],
+                "v_lat": G.nodes[node_id]["y"],
+                "v_lon": G.nodes[node_id]["x"],
+                "length_m": length_m,
+                "highway": highway,
+                "coords": coords,
+                "direction": "in",
+                "is_blocked": (u, node_id) in GS.blocked_edges or (node_id, u) in GS.blocked_edges
+            })
+
+    return {
+        "node_id": node_id,
+        "lat": G.nodes[node_id]["y"],
+        "lon": G.nodes[node_id]["x"],
+        "adjacent_edges": adj_edges
+    }
+
+
+@app.get("/api/graph/nearest", tags=["Graph"])
+def get_nearest_node(lat: float, lon: float):
+    _require_graph()
+    try:
+        node_id = GS.nearest(lat, lon)
+        return {
+            "node_id": node_id,
+            "lat": float(GS.G.nodes[node_id]["y"]),
+            "lon": float(GS.G.nodes[node_id]["x"])
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Error finding nearest node: {str(e)}")
+
+
+@app.get("/api/graph/nearest-edge", tags=["Graph"])
+def get_nearest_edge(lat: float, lon: float):
+    _require_graph()
+    try:
+        u, v, k = GS.nearest_edge(lat, lon)
+        G = GS.G
+        edge_data = G.get_edge_data(u, v, k)
+        length_m, highway, coords = extract_edge_attributes(edge_data, u, v, G)
+
+        return {
+            "u": u,
+            "v": v,
+            "key": k,
+            "u_lat": float(G.nodes[u]["y"]),
+            "u_lon": float(G.nodes[u]["x"]),
+            "v_lat": float(G.nodes[v]["y"]),
+            "v_lon": float(G.nodes[v]["x"]),
+            "length_m": length_m,
+            "highway": highway,
+            "coords": coords,
+            "is_blocked": (u, v) in GS.blocked_edges or (v, u) in GS.blocked_edges
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Error finding nearest edge: {str(e)}")
