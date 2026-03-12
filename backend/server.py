@@ -375,7 +375,71 @@ def health():
 
 
 @app.post("/api/route", response_model=RouteOut, tags=["Route"])
+def find_route(body: RouteIn):
+    _require_graph()
+    src = GS.nearest(body.start_lat, body.start_lon)
+    dst = GS.nearest(body.end_lat, body.end_lon)
 
-@app.get("/health", tags=["System"])
-def health():
-    return {"status": "ok", **GS.info()}
+    if src == dst:
+        return RouteOut(
+            found=False,
+            algorithm=body.algorithm,
+            error="Origin and destination are too close (snapped to the same intersection node)."
+        )
+
+    fn = astar if body.algorithm == "astar" else dijkstra
+    path, dist_m, exec_s = fn(GS.G, src, dst, blocked_edges=GS.blocked_edges)
+
+    if not path:
+        return RouteOut(
+            found=False,
+            algorithm=body.algorithm,
+            error="No viable route found (target disconnected or paths blocked)."
+        )
+
+    return RouteOut(
+        found=True,
+        algorithm=body.algorithm,
+        path_coordinates=path_to_coordinates(GS.G, path),
+        total_distance_m=round(dist_m, 2),
+        exec_time_ms=round(exec_s * 1000, 3),
+        node_count=len(path),
+    )
+
+
+@app.get("/api/locations/presets", tags=["Locations"])
+def get_presets():
+    return {
+        "locations": [
+            {"name": k, "lat": v[0], "lon": v[1]}
+            for k, v in PRESET_LOCATIONS.items()
+        ]
+    }
+
+
+@app.get("/api/graph/info", tags=["Graph"])
+def graph_info():
+    return GS.info()
+
+
+@app.post("/api/graph/build", tags=["Graph"])
+def graph_build():
+    if not os.path.exists(PBF_PATH):
+        raise HTTPException(404, f"PBF file not found at: {PBF_PATH}")
+    try:
+        return {"success": True, "message": "Graph build initiated in background.", **GS.start_async_build()}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/graph/reload", tags=["Graph"])
+def graph_reload():
+    if not os.path.exists(GRAPH_PATH):
+        raise HTTPException(404, f"Graph cache file not found at: {GRAPH_PATH}")
+    try:
+        return {"success": True, "message": "Graph cache reloaded.", **GS.reload()}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/graph/blocked", response_model=List[BlockedEdgeInfo], tags=["Graph"])
