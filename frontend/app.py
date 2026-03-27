@@ -430,10 +430,267 @@ def _map_tab():
     routing_widget("admin_routing")
 
 
+def _blocked_roads_tab():
+    st.subheader("🚧 Quản lý Chặn Tuyến Đường (Road Blocking Simulation)")
+    st.caption("Mô phỏng sự cố tai nạn hoặc công trình thi công. Thuật toán tìm đường sẽ tự động đổi lộ trình để né tránh.")
+
+    blocked_list, _ = api_blocked_edges()
+
+    st.session_state.setdefault("admin_last_clicked", None)
+    st.session_state.setdefault("selected_edge", None)
+
+    m_admin = folium.Map(location=[42.3601, -71.0589], zoom_start=13, tiles="CartoDB positron", scrollWheelZoom=False)
+
+    if blocked_list:
+        for edge in blocked_list:
+            coords = [tuple(c) for c in edge["coords"]]
+            folium.PolyLine(
+                coords,
+                weight=5,
+                color="#DC2626",
+                opacity=0.9,
+                dash_array="5, 8",
+                tooltip=f"Đang chặn: {edge['name']}"
+            ).add_to(m_admin)
+
+    if st.session_state["admin_last_clicked"]:
+        clat, clon = st.session_state["admin_last_clicked"]
+        folium.Marker(
+            [clat, clon],
+            tooltip="Vị trí đã chọn",
+            icon=folium.Icon(color="red", icon="map-marker", prefix="fa")
+        ).add_to(m_admin)
+
+    if st.session_state["selected_edge"]:
+        edge = st.session_state["selected_edge"]
+        folium.PolyLine(
+            edge["coords"],
+            weight=8,
+            color="#F59E0B",
+            opacity=0.9,
+            tooltip=f"Tuyến đường đang chọn: {edge['highway']} ({edge['u']} -> {edge['v']})"
+        ).add_to(m_admin)
+
+    c1, c2 = st.columns([7, 3])
+
+    with c1:
+        st.info("👉 Click chuột trực tiếp lên bất kỳ con đường nào trên bản đồ để chọn đoạn đường cần chặn.")
+        map_data = st_folium(m_admin, use_container_width=True, height=420, key="admin_blocking_map", returned_objects=["last_clicked"])
+
+        last_clicked = map_data.get("last_clicked")
+        if last_clicked:
+            new_click = (last_clicked["lat"], last_clicked["lng"])
+            if st.session_state["admin_last_clicked"] != new_click:
+                st.session_state["admin_last_clicked"] = new_click
+                with st.spinner("Đang định danh đoạn đường..."):
+                    edge_data, err = api_nearest_edge(new_click[0], new_click[1])
+                    st.session_state["selected_edge"] = edge_data if not err else None
+                st.rerun()
+
+    with c2:
+        st.markdown("#### Thao tác chặn đường")
+
+        if st.session_state["admin_last_clicked"]:
+            lat, lon = st.session_state["admin_last_clicked"]
+            st.success(f"Tọa độ chọn: `{lat:.6f}, {lon:.6f}`")
+
+            if st.session_state["selected_edge"]:
+                edge = st.session_state["selected_edge"]
+                is_bl = edge["is_blocked"]
+
+                st.markdown(f"""
+                <div style='background: #F1F5F9; padding: 10px; border-radius: 6px; margin: 8px 0;'>
+                    <div>🏷️ <b>Loại đường:</b> <code>{edge['highway'].upper()}</code></div>
+                    <div>📏 <b>Chiều dài:</b> <code>{edge['length_m']}m</code></div>
+                    <div>🔗 <b>Giao lộ:</b> <code>{edge['u']}</code> ➔ <code>{edge['v']}</code></div>
+                    <div style='margin-top: 6px;'>🚦 <b>Trạng thái:</b> {'<span style="color:#DC2626;font-weight:700">ĐANG BỊ CHẶN 🚧</span>' if is_bl else '<span style="color:#16A34A;font-weight:700">THÔNG SUỐT 🟢</span>'}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                btn_lbl = "🔓 Mở chặn đoạn này" if is_bl else "⛔ Chặn đoạn đường này"
+                btn_type = "secondary" if is_bl else "primary"
+
+                if st.button(btn_lbl, type=btn_type, use_container_width=True):
+                    if is_bl:
+                        _, err = api_unblock_edge(edge["u"], edge["v"])
+                        if err:
+                            st.error(err)
+                        else:
+                            st.success("Đã mở chặn tuyến đường!")
+                            edge_data, _ = api_nearest_edge(lat, lon)
+                            st.session_state["selected_edge"] = edge_data
+                            st.rerun()
+                    else:
+                        _, err = api_block_edge(edge["u"], edge["v"])
+                        if err:
+                            st.error(err)
+                        else:
+                            st.success("Đã chặn tuyến đường thành công!")
+                            edge_data, _ = api_nearest_edge(lat, lon)
+                            st.session_state["selected_edge"] = edge_data
+                            st.rerun()
+            else:
+                st.warning("Không tìm thấy đoạn đường nào quanh vị trí bạn click.")
+        else:
+            st.info("Nhấp chọn một vị trí trên bản đồ để bắt đầu.")
+
+    st.divider()
+    st.markdown("#### Danh sách các tuyến đường đang bị chặn")
+    if blocked_list:
+        for b_edge in blocked_list:
+            col_a, col_b = st.columns([8, 2])
+            with col_a:
+                st.markdown(f"Đoạn nối Giao lộ `{b_edge['u']}` ➔ `{b_edge['v']}` ({b_edge['name']})")
+            with col_b:
+                if st.button("Mở chặn", key=f"unb_list_{b_edge['u']}_{b_edge['v']}", use_container_width=True):
+                    _, err = api_unblock_edge(b_edge["u"], b_edge["v"])
+                    if not err:
+                        st.rerun()
+
+        st.divider()
+        if st.button("🧹 Khôi phục toàn bộ mạng lưới bản đồ (Mở hết chặn)", type="primary", use_container_width=True):
+            _, err = api_clear_blocked()
+            if not err:
+                st.success("Đã mở chặn toàn bộ mạng lưới giao thông!")
+                st.rerun()
+    else:
+        st.info("Hiện không có sự cố giao thông nào được thiết lập. Toàn bộ mạng lưới đường phố đang thông suốt.")
+
+
+def _data_tab():
+    st.subheader("📊 Quản lý Dữ liệu & Đồ thị Không gian")
+    c1, c2 = st.columns(2, gap="large")
+
+    with c1:
+        st.markdown("#### Trạng thái Đồ thị")
+        info, err = api_graph_info()
+        if err:
+            st.error(f"Lỗi truy vấn: {err}")
+        else:
+            if info.get("loaded"):
+                st.success("Đồ thị đã tải trong RAM và sẵn sàng phục vụ")
+                st.markdown(f"""
+                - **Số nút giao (Nodes):** `{info['node_count']:,}`
+                - **Số đoạn đường (Edges):** `{info['edge_count']:,}`
+                - **Số tuyến đường bị chặn:** `{info['blocked_count']:,}`
+                - **Đường dẫn tệp PBF gốc:** `{info['pbf_path']}`
+                - **Đường dẫn tệp cache đồ thị:** `{info['graph_path']}`
+                """)
+            else:
+                st.warning("Đồ thị chưa được tải vào bộ nhớ RAM.")
+
+            st.divider()
+            st.markdown(f"**Trạng thái Build:** `{info.get('build_status', 'idle').upper()}`")
+            if info.get("build_status") == "building":
+                st.info("Đồ thị đang được khởi tạo ngầm từ tệp PBF. Thao tác này mất từ 2-6 phút. Vui lòng bấm reload/F5 để cập nhật.")
+            elif info.get("build_status") == "error":
+                st.error(f"Lỗi build: {info.get('build_error')}")
+
+    with c2:
+        st.markdown("#### Tác vụ Quản trị")
+        if st.button("⚡ Tái tạo đồ thị từ PBF thô", type="primary", use_container_width=True,
+                     help="Parse .pbf, chuyển đổi sang NetworkX và lưu vào data/ (~2-5 phút)"):
+            res, err = api_graph_build()
+            if err:
+                st.error(f"Lỗi: {err}")
+            else:
+                st.success("Đã kích hoạt tiến trình tạo đồ thị dưới nền. Hãy làm mới sau vài phút.")
+                st.rerun()
+
+        if st.button("🔄 Tải lại đồ thị từ tệp cache .pkl", use_container_width=True):
+            res, err = api_graph_reload()
+            if err:
+                st.error(f"Lỗi: {err}")
+            else:
+                st.success(f"Đã nạp lại thành công! {res['node_count']:,} nodes · {res['edge_count']:,} edges")
+                st.rerun()
+
 
 def page_admin():
-    _map_tab()
+    with st.sidebar:
+        st.markdown("### 🛠️ Menu Quản Trị")
+        menu = st.radio("Chọn chức năng:", ["Tìm đường", "Chặn tuyến đường", "Dữ liệu hệ thống"])
+        st.divider()
 
-st.set_page_config(page_title="Boston Smart Route Finder", page_icon="🗺️", layout="wide")
+    if menu == "Tìm đường":
+        _map_tab()
+    elif menu == "Chặn tuyến đường":
+        _blocked_roads_tab()
+    else:
+        _data_tab()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN APPLICATION ENTRYPOINT
+# ══════════════════════════════════════════════════════════════════════════════
+
+st.set_page_config(
+    page_title="Boston Smart Route Finder",
+    page_icon="🗺️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+def apply_custom_css():
+    st.markdown("""
+        <style>
+            .main .block-container {
+                padding-top: 1rem !important;
+                padding-bottom: 1rem !important;
+                padding-left: 2rem !important;
+                padding-right: 2rem !important;
+            }
+            div.element-container {
+                margin-bottom: 0.4rem !important;
+            }
+            html, body, [class*="css"], .stMarkdown, p, span, label, select, input, button {
+                font-size: 13.5px !important;
+            }
+            h1, h2, h3, h4, h5, h6 {
+                margin-top: 0px !important;
+                margin-bottom: 0.3rem !important;
+            }
+            h1 { font-size: 1.5rem !important; }
+            h2 { font-size: 1.25rem !important; }
+            h3 { font-size: 1.05rem !important; }
+            div[data-testid="stForm"] {
+                padding: 0.75rem !important;
+                border-radius: 8px !important;
+                background-color: #FAFAFA;
+            }
+            hr {
+                margin-top: 0.4rem !important;
+                margin-bottom: 0.4rem !important;
+            }
+            header {
+                visibility: hidden !important;
+                height: 0px !important;
+            }
+            footer {
+                visibility: hidden !important;
+            }
+            section[data-testid="stSidebar"] {
+                padding-top: 1rem !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+apply_custom_css()
 init()
-page_user()
+
+# Sidebar: Role Switching
+with st.sidebar:
+    st.markdown("### 👤 Vai Trò Người Dùng")
+    role_choice = st.selectbox(
+        "Chọn chế độ trải nghiệm:",
+        ["Người dùng thường", "Quản trị viên (Admin)"],
+        index=0 if st.session_state["role"] == "user" else 1
+    )
+    st.session_state["role"] = "admin" if role_choice == "Quản trị viên (Admin)" else "user"
+    st.divider()
+
+# Dispatch based on role
+if st.session_state["role"] == "admin":
+    page_admin()
+else:
+    page_user()
